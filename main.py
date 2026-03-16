@@ -1,148 +1,165 @@
-"""
-main.py
--------
-Point d'entrée unique du projet Taxi-v3 RL.
+import pygame
+import numpy as np
+from env import SimpleTaxiEnv
+from stable_baselines3 import DQN
 
-Modes disponibles :
-  train   — Lance l'entraînement complet
-  eval    — Évalue un modèle sauvegardé
-  demo    — Joue un épisode en mode visuel (terminal)
+# Configuration Pygame
+CELL_SIZE = 60
+GRID_WIDTH = 10
+GRID_HEIGHT = 8
+SCREEN_WIDTH = GRID_WIDTH * CELL_SIZE
+SCREEN_HEIGHT = GRID_HEIGHT * CELL_SIZE
 
-Exemples :
-  python main.py train
-  python main.py train --episodes 3000 --alpha 0.2
-  python main.py eval
-  python main.py eval --model training/checkpoints/qtable_ep1000.pkl
-  python main.py demo
-  python main.py demo --delay 0.5
-"""
-
-import argparse
-import sys
-import os
-
-
-# ---------------------------------------------------------------------------
-# Mode TRAIN
-# ---------------------------------------------------------------------------
-
-def run_train(args):
-    from training.train import train, DEFAULTS
-
-    cfg = dict(DEFAULTS)
-    cfg.update({k: v for k, v in vars(args).items() if v is not None and k != "mode"})
-    train(cfg)
+# Couleurs
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+GRAY = (200, 200, 200)
+YELLOW = (255, 255, 0)
+RED = (255, 0, 0)
+GREEN = (0, 255, 0)
+BLUE = (0, 0, 255)
+PURPLE = (128, 0, 128)
 
 
-# ---------------------------------------------------------------------------
-# Mode EVAL
-# ---------------------------------------------------------------------------
-
-def run_eval(args):
-    from src.environment import make_env
-    from src.agent import QLearningAgent
-    from evaluation.evaluate import evaluate_silent, print_metrics, plot_eval_distribution
-
-    model_path = args.model or "training/checkpoints/qtable_final.pkl"
-    if not os.path.exists(model_path):
-        print(f"[Erreur] Modèle introuvable : {model_path}")
-        print("  Lancez d'abord : python main.py train")
-        sys.exit(1)
-
-    env = make_env()
-    agent = QLearningAgent(env.observation_space.n, env.action_space.n)
-    env.close()
-
-    agent.load(model_path)
-    agent.epsilon = 0.0
-
-    n_ep = args.episodes or 100
-    print(f"\n[Eval] Évaluation sur {n_ep} épisodes...")
-    metrics = evaluate_silent(agent, n_episodes=n_ep)
-    print_metrics(metrics)
-
-    os.makedirs("logs", exist_ok=True)
-    rewards_list = []
-    env2 = make_env()
-    for _ in range(n_ep):
-        s, _ = env2.reset()
-        tot = 0
-        for _ in range(200):
-            a = agent.select_action(s)
-            s, r, te, tr, _ = env2.step(a)
-            tot += r
-            if te or tr:
-                break
-        rewards_list.append(tot)
-    env2.close()
-    plot_eval_distribution(rewards_list, save_path="logs/eval_distribution.png")
+def draw_grid(screen):
+    """Dessine la grille."""
+    for x in range(0, SCREEN_WIDTH + 1, CELL_SIZE):
+        pygame.draw.line(screen, GRAY, (x, 0), (x, SCREEN_HEIGHT))
+    for y in range(0, SCREEN_HEIGHT + 1, CELL_SIZE):
+        pygame.draw.line(screen, GRAY, (0, y), (SCREEN_WIDTH, y))
 
 
-# ---------------------------------------------------------------------------
-# Mode DEMO
-# ---------------------------------------------------------------------------
-
-def run_demo(args):
-    from src.environment import make_env
-    from src.agent import QLearningAgent
-    from src.interface import render_episode
-
-    model_path = args.model or "training/checkpoints/qtable_final.pkl"
-    if not os.path.exists(model_path):
-        print(f"[Erreur] Modèle introuvable : {model_path}")
-        print("  Lancez d'abord : python main.py train")
-        sys.exit(1)
-
-    env = make_env(render_mode="human")
-    agent = QLearningAgent(env.observation_space.n, env.action_space.n)
-    agent.load(model_path)
-    agent.epsilon = 0.0  # greedy pur pour la démo
-
-    delay = args.delay if hasattr(args, "delay") and args.delay else 0.3
-    render_episode(env, agent, max_steps=200, delay=delay)
-    env.close()
+def draw_walls(screen, env):
+    """Dessine les remparts fixes."""
+    for (x, y) in env.walls:
+        rect = pygame.Rect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+        pygame.draw.rect(screen, GRAY, rect)
+        pygame.draw.rect(screen, BLACK, rect, 2)
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+def draw_taxi(screen, env):
+    """Dessine le taxi."""
+    x = env.taxi_x * CELL_SIZE + CELL_SIZE // 2
+    y = env.taxi_y * CELL_SIZE + CELL_SIZE // 2
+    pygame.draw.circle(screen, YELLOW, (x, y), CELL_SIZE // 3)
+    pygame.draw.circle(screen, BLACK, (x, y), CELL_SIZE // 3, 2)
+
+
+def draw_destinations(screen, env):
+    """Dessine les destinations des passagers."""
+    for i, p in enumerate(env.passengers):
+        if not p.get("active", True): continue
+        dx, dy = p["dest_x"], p["dest_y"]
+        rect = pygame.Rect(dx * CELL_SIZE, dy * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+        pygame.draw.rect(screen, GREEN, rect, 2)
+        font = pygame.font.Font(None, 20)
+        text = font.render(f"D{i+1}", True, GREEN)
+        screen.blit(text, (dx * CELL_SIZE + 5, dy * CELL_SIZE + 5))
+
+
+def draw_passengers(screen, env):
+    """Dessine les passagers."""
+    for i, p in enumerate(env.passengers):
+        if not p.get("active", True): continue
+        if not p["in_taxi"]:
+            x = p["x"] * CELL_SIZE + CELL_SIZE // 2
+            y = p["y"] * CELL_SIZE + CELL_SIZE // 2
+            pygame.draw.circle(screen, RED, (x, y), CELL_SIZE // 4)
+            font = pygame.font.Font(None, 20)
+            text = font.render(str(i+1), True, WHITE)
+            screen.blit(text, (x - 5, y - 5))
+
+
+def draw_info(screen, env, episode, total_reward, action_names):
+    """Affiche les informations."""
+    font = pygame.font.Font(None, 28)
+    info_text = [
+        f"Episode: {episode}",
+        f"Steps: {env.steps_taken}/{env.max_steps}",
+        f"Delivered: {env.delivered}/{env.num_passengers}",
+        f"Reward: {total_reward:.1f}",
+    ]
+    
+    for i, text in enumerate(info_text):
+        surface = font.render(text, True, BLACK)
+        screen.blit(surface, (10, SCREEN_HEIGHT + 10 + i * 30))
+
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Taxi-v3 RL — Q-Learning | Mode : train / eval / demo",
-        formatter_class=argparse.RawTextHelpFormatter,
-    )
-    subparsers = parser.add_subparsers(dest="mode", required=True)
-
-    # --- train ---
-    p_train = subparsers.add_parser("train", help="Lancer l'entraînement")
-    p_train.add_argument("--episodes",       type=int,   help="Nombre d'épisodes (défaut: 2000)")
-    p_train.add_argument("--alpha",          type=float, help="Taux d'apprentissage (défaut: 0.1)")
-    p_train.add_argument("--gamma",          type=float, help="Facteur d'actualisation (défaut: 0.99)")
-    p_train.add_argument("--epsilon",        type=float, help="Epsilon initial (défaut: 1.0)")
-    p_train.add_argument("--epsilon_min",    type=float, help="Epsilon minimum (défaut: 0.01)")
-    p_train.add_argument("--epsilon_decay",  type=float, help="Décroissance epsilon (défaut: 0.995)")
-    p_train.add_argument("--checkpoint_every", type=int, help="Sauvegarder tous les N épisodes")
-    p_train.add_argument("--log_dir",        type=str,   help="Dossier logs TensorBoard")
-
-    # --- eval ---
-    p_eval = subparsers.add_parser("eval", help="Évaluer un modèle sauvegardé")
-    p_eval.add_argument("--model",    type=str, help="Chemin vers qtable_.pkl")
-    p_eval.add_argument("--episodes", type=int, help="Épisodes d'évaluation (défaut: 100)")
-
-    # --- demo ---
-    p_demo = subparsers.add_parser("demo", help="Démo visuelle dans le terminal")
-    p_demo.add_argument("--model", type=str,   help="Chemin vers qtable_.pkl")
-    p_demo.add_argument("--delay", type=float, help="Délai entre pas en secondes (défaut: 0.3)")
-
-    args = parser.parse_args()
-
-    if args.mode == "train":
-        run_train(args)
-    elif args.mode == "eval":
-        run_eval(args)
-    elif args.mode == "demo":
-        run_demo(args)
+    pygame.init()
+    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT + 150))
+    pygame.display.set_caption("Taxi Environment - DQN")
+    clock = pygame.time.Clock()
+    
+    env = SimpleTaxiEnv()
+    
+    # Charger le modèle entraîné
+    try:
+        agent = DQN.load("models/dqn_taxi", env=env, render_mode="human")
+        print("✓ Modèle chargé")
+    except:
+        print("⚠ Modèle non trouvé, utilisation d'actions aléatoires")
+        agent = None
+    
+    action_names = ["↓ Sud", "↑ Nord", "→ Est", "← Ouest", "📦 Prendre", "📍 Déposer"]
+    
+    episode = 0
+    running = True
+    paused = False
+    obs, _ = env.reset()
+    total_reward = 0
+    
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE:
+                    paused = not paused
+                elif event.key == pygame.K_r:
+                    episode = 0
+                    obs, _ = env.reset()
+                    total_reward = 0
+        
+        if not paused:
+            # Prédiction
+            if agent:
+                action, _ = agent.predict(obs, deterministic=True)
+            else:
+                action = env.action_space.sample()
+            
+            obs, reward, terminated, truncated, _ = env.step(action)
+            total_reward += reward
+            
+            # Fin d'épisode
+            if terminated or truncated:
+                episode += 1
+                obs, _ = env.reset()
+                total_reward = 0
+        
+        # Rendu
+        screen.fill(WHITE)
+        draw_grid(screen)
+        draw_walls(screen, env)
+        draw_destinations(screen, env)
+        draw_taxi(screen, env)
+        draw_passengers(screen, env)
+        draw_info(screen, env, episode, total_reward, action_names)
+        
+        # Instructions
+        font = pygame.font.Font(None, 20)
+        instructions = [
+            "SPACE: Pause/Resume | R: Reset | Q: Quit",
+        ]
+        for i, text in enumerate(instructions):
+            surface = font.render(text, True, GRAY)
+            screen.blit(surface, (10, SCREEN_HEIGHT + 130))
+        
+        pygame.display.flip()
+        clock.tick(4)
+    
+    env.close()
+    pygame.quit()
 
 
 if __name__ == "__main__":
