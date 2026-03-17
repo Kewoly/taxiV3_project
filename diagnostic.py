@@ -54,26 +54,27 @@ def test_environment():
 def test_training():
     """Teste l'entraînement avec un petit nombre de timesteps."""
     print("="*60)
-    print("TEST D'ENTRAÎNEMENT (10k timesteps)")
+    print("TEST D'ENTRAÎNEMENT (100k timesteps, 1 passager)")
     print("="*60 + "\n")
     
-    env = SimpleTaxiEnv()
+    env = SimpleTaxiEnv(num_passengers=1)
     
     agent = DQN(
         policy="MlpPolicy",
         env=env,
-        learning_rate=5e-4,
+        learning_rate=1e-3,
         buffer_size=50_000,
-        batch_size=64,
+        batch_size=32,
         gamma=0.99,
         target_update_interval=500,
-        exploration_fraction=0.2,
+        exploration_fraction=0.3,
+        exploration_initial_eps=1.0,
         exploration_final_eps=0.05,
         verbose=0,
     )
     
     print("Entraînement en cours...")
-    agent.learn(total_timesteps=10_000)
+    agent.learn(total_timesteps=100_000)
     
     # Évaluer
     print("\nÉvaluation sur 10 épisodes...")

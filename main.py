@@ -95,7 +95,7 @@ def main():
     
     # Charger le modèle entraîné
     try:
-        agent = DQN.load("models/dqn_taxi", env=env, render_mode="human")
+        agent = DQN.load("models/dqn_taxi", env=env)
         print("✓ Modèle chargé")
     except:
         print("⚠ Modèle non trouvé, utilisation d'actions aléatoires")
@@ -108,6 +108,9 @@ def main():
     paused = False
     obs, _ = env.reset()
     total_reward = 0
+    step_counter = 0
+    action_interval = 2
+    last_action = None
     
     while running:
         for event in pygame.event.get():
@@ -120,14 +123,26 @@ def main():
                     episode = 0
                     obs, _ = env.reset()
                     total_reward = 0
+                    step_counter = 0
+                    last_action = None
         
         if not paused:
-            # Prédiction
-            if agent:
-                action, _ = agent.predict(obs, deterministic=True)
+            step_counter += 1
+            if step_counter >= action_interval:
+                step_counter = 0
+                # Prédiction
+                try:
+                    if agent:
+                        action, _ = agent.predict(obs, deterministic=True)
+                    else:
+                        action = env.action_space.sample()
+                    last_action = action
+                except Exception as e:
+                    print(f"Erreur prédiction: {e}")
+                    action = env.action_space.sample()
             else:
-                action = env.action_space.sample()
-            
+                action = last_action if last_action is not None else env.action_space.sample()
+
             obs, reward, terminated, truncated, _ = env.step(action)
             total_reward += reward
             
@@ -136,6 +151,8 @@ def main():
                 episode += 1
                 obs, _ = env.reset()
                 total_reward = 0
+                step_counter = 0
+                last_action = None
         
         # Rendu
         screen.fill(WHITE)

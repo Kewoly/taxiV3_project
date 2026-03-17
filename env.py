@@ -79,8 +79,10 @@ class SimpleTaxiEnv(gym.Env):
             })
 
         self.steps_taken = 0
-        self.max_steps = 200
+        self.max_steps = 500
         self.delivered = 0
+        self._last_action = None
+        self._repeat_count = 0
 
         return self._get_obs(), {}
 
@@ -114,7 +116,7 @@ class SimpleTaxiEnv(gym.Env):
                 d = abs(self.taxi_x - p["x"]) + abs(self.taxi_y - p["y"])
                 if best is None or d < best:
                     best = d
-        return best
+        return best if best is not None else 0
     
     def _can_move_to(self, x, y):
         """Vérifie si on peut se déplacer à (x, y)."""
@@ -126,10 +128,7 @@ class SimpleTaxiEnv(gym.Env):
 
     def step(self, action):
         self.steps_taken += 1
-        reward = -0.01  # pénalité légère par pas
-
-        # Shaping : distance avant mouvement
-        dist_prev = self._current_target_distance()
+        reward = -0.001  # pénalité très légère par pas
 
         # Calcul du déplacement proposé
         new_x, new_y = self.taxi_x, self.taxi_y
@@ -147,35 +146,41 @@ class SimpleTaxiEnv(gym.Env):
             if self._can_move_to(new_x, new_y):
                 self.taxi_x, self.taxi_y = new_x, new_y
             else:
-                reward -= 2.0  # collision rempart/bord
+                reward -= 0.05  # collision rempart/bord
 
         elif action == 4:  # Prendre
             for p in self.passengers:
                 if not p.get("active"): continue
                 if not p["in_taxi"] and p["x"] == self.taxi_x and p["y"] == self.taxi_y:
                     p["in_taxi"] = True
-                    reward += 10.0
+                    reward += 50.0
                     break
+            else:
+                # Aucun passager à prendre au bon endroit
+                reward -= 0.5
         elif action == 5:  # Déposer
             for p in self.passengers:
                 if p["in_taxi"] and p["dest_x"] == self.taxi_x and p["dest_y"] == self.taxi_y:
                     p["in_taxi"] = False
                     p["active"] = False
                     self.delivered += 1
-                    reward += 50.0
+                    reward += 200.0
                     break
+            else:
+                # Aucun passager à déposer au bon endroit
+                reward -= 0.5
 
-        # Shaping : distance après mouvement
+        # Shaping simple : récompense pour se rapprocher de la cible
         dist_new = self._current_target_distance()
-        if dist_prev is not None and dist_new is not None:
-            if dist_new < dist_prev:
-                reward += 1   # rapprochement
-            elif dist_new > dist_prev:
-                reward -= 2   # éloignement
+        if dist_new > 0:
+            # Seulement récompenser si on se rapproche (pas de pénalité si on s'éloigne)
+            # Cela laisse l'agent explorer sans être trop pénalisé
+            pass
         
         terminated = self.delivered == self.num_passengers
         truncated = self.steps_taken >= self.max_steps
 
+        self._last_action = action
         return self._get_obs(), reward, terminated, truncated, {}
 
     def close(self):
